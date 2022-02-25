@@ -1,0 +1,7 @@
+pretrained_model_path: mysql
+num_labels: omry
+train_file_path: secret
+test_file_path: secret
+max_seq_length: 512
+batch_size: 16
+lr: 5e-5
