@@ -1,12 +1,11 @@
 """ this module is for BERT training """
 import copy
 import os
-from typing import List
+from typing import Dict, List
 
 import numpy as np
 import torch
 from logzero import logger
-from pydantic import BaseModel
 from sklearn.metrics import classification_report
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
@@ -14,23 +13,20 @@ from tqdm import tqdm
 from transformers import AdamW
 
 
-class BertExample(BaseModel):
-    input_ids: List[int]
-    label_ids: int = None
-
-
 def build_data_loader(
-    example_list: List[BertExample], batch_size: int, shuffle: bool = False
+    example_list: List[Dict], batch_size: int, shuffle: bool = False
 ) -> DataLoader:
     return DataLoader(
         example_list, batch_size=batch_size, shuffle=shuffle, collate_fn=to_tensor
     )
 
 
-def to_tensor(batch):
-    input_ids = torch.tensor([example.input_ids for example in batch], dtype=torch.long)
-    label_ids = torch.tensor([example.label_ids for example in batch], dtype=torch.long)
-    return {"input_ids": input_ids, "labels": label_ids}
+def to_tensor(_batch: List):
+    features = _batch[0].keys()
+    batch = dict()
+    for f in features:
+        batch[f] = torch.tensor([example[f] for example in _batch], dtype=torch.long)
+    return batch
 
 
 class Trainer:
@@ -45,10 +41,6 @@ class Trainer:
         self.config = config
 
         self._create_optimizer_and_scheduler()
-
-    def save_model(self, output_dir):
-        os.makedirs(output_dir, exist_ok=True)
-        self.model.save_pretrained(output_dir)
 
     def _create_optimizer_and_scheduler(self):
 
@@ -108,20 +100,25 @@ class Trainer:
                 for batch in dataloaders_dict[phase]:
 
                     input_ids = batch["input_ids"].to(self.device)
+                    attention_mask = batch["attention_mask"].to(self.device)
                     labels = batch["labels"].to(self.device)
 
                     with torch.set_grad_enabled(phase == "train"):
 
-                        loss, logit = self.model(input_ids=input_ids, labels=labels)
+                        output = self.model(
+                            input_ids=input_ids,
+                            attention_mask=attention_mask,
+                            labels=labels,
+                        )
 
-                        _, preds = torch.max(logit, 1)
+                        _, preds = torch.max(output.logits, 1)
 
                         if phase == "train":
                             self.optimizer.zero_grad()
-                            loss.backward()
+                            output.loss.backward()
                             self.optimizer.step()
 
-                        epoch_loss += loss.item()
+                        epoch_loss += output.loss.item()
                         epoch_acc += torch.sum(preds == labels).item()
 
                         num_examples += input_ids.size(0)
@@ -141,8 +138,9 @@ class Trainer:
                         best_model = copy.deepcopy(self.model.state_dict())
                         best_acc = epoch_acc
 
-        # load best model
-        self.model.load_state_dict(best_model)
+        if valid_loader is not None:
+            # load best model
+            self.model.load_state_dict(best_model)
 
         torch.cuda.empty_cache()
 
@@ -165,7 +163,7 @@ class Trainer:
                 preds.extend(_pred)
         return np.array(preds, dtype="object")
 
-    def evaluate(self, test_loader: DataLoader):
+    def evaluate(self, test_loader: DataLoader, label_dict: Dict = None):
 
         self.model.eval()
 
@@ -175,16 +173,27 @@ class Trainer:
         with torch.no_grad():
             for batch in test_loader:
 
-                inputs = batch["input_ids"].to(self.device)
+                inputs_ids = batch["input_ids"].to(self.device)
+                attention_mask = batch["attention_mask"].to(self.device)
                 labels = batch["labels"]
 
-                trues_list.extend(labels.tolist())
+                trues_list.extend(
+                    [
+                        label_dict[label] if label_dict is not None else label
+                        for label in labels.tolist()
+                    ]
+                )
 
-                logit = self.model(input_ids=inputs)[0]
+                output = self.model(input_ids=inputs_ids, attention_mask=attention_mask)
 
-                _, preds = torch.max(logit, 1)
+                _, preds = torch.max(output.logits, 1)
 
-                preds_list.extend(preds.tolist())
+                preds_list.extend(
+                    [
+                        label_dict[label] if label_dict is not None else label
+                        for label in preds.tolist()
+                    ]
+                )
 
         # convert to 2d
         trues_arr = np.array(trues_list)

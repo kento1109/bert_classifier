@@ -1,7 +1,15 @@
-pretrained_model_path: mysql
-num_labels: omry
-train_file_path: secret
-test_file_path: secret
-max_seq_length: 512
-batch_size: 16
-lr: 5e-5
+labels: [first, not_first]
+
+do_train: True
+do_evalate: False
+
+pretrained_path: /home/sugimoto/BERT-base_mecab-ipadic-bpe-32k_whole-word-mask
+save_path: ~
+
+train_params:
+  train_file_path: /home/sugimoto/experiments/inputs/train.tsv
+  test_file_path: /home/sugimoto/experiments/inputs/test.tsv
+  max_seq_length: 128
+  batch_size: 16
+  num_epochs: 1
+  lr: 5e-5
